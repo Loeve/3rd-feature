@@ -1,0 +1,115 @@
+
+function demoIsing()
+% same as demoSingle, but we use image independent priors on the edge labels
+% psi_e(L,L') = exp( L * L' * w) = exp(-w) if L <> L' and exp(w) if L==L'
+% We do this by setting raw features = [1] for each edge
+
+% Load Training/Testing Data
+label = sign(double(imread('X.png'))-1);
+label=label(:,:,1);
+noisy = label+randn(32,32);
+figure(1);
+imshow([label noisy]);
+title('Labels   Observed');
+nstates = 2;
+drawnow
+
+% Make Features and Feature Engine
+featureEng = latticeFeatures(0,0); % 0's indicate to just use features directly
+features = permute(noisy,[4 1 2 3]);
+traindata.nodeFeatures = mkNodeFeatures(featureEng,features);
+
+%%%%%%%%%%
+%traindata.edgeFeatures = mkEdgeFeatures(featureEng,features);
+
+[Draw nr nc ncases] = size(features);
+[out_edge, outNbr, edgeEndsIJ, edgeEndsRC, in_edge, nedges] = ...
+    assign_edge_nums_lattice(nr, nc);
+nedgesDir = size(edgeEndsIJ,1);
+
+Dim = 1;
+traindata.edgeFeatures = ones(Dim, nedgesDir, ncases);
+
+%%%%%%%%%%%%%%
+
+
+traindata.nodeLabels = label;
+traindata.ncases = 1;
+trainNdx = 1:traindata.ncases;
+nNodeFeatures = size(traindata.nodeFeatures,1);
+nEdgeFeatures = size(traindata.edgeFeatures,1);
+
+featureEng = enterEvidence(featureEng, traindata, 1); % store data
+infEng = latticeInferMF(nstates);
+
+% Use random params
+figure;
+for i=1:4
+  weights = initWeights(featureEng, nNodeFeatures,nEdgeFeatures);
+  subplot(2,2,i)
+  showResults(weights, featureEng, infEng);
+  drawnow
+end
+suptitle('MF Inference with random parameters');
+
+
+%%%%%%%%%%%%% Pseudo likelihood
+reg = 1;
+%maxIter = 50;
+maxIter = 5;
+options = optimset('Display','iter','Diagnostics','off','GradObj','on',...
+    'LargeScale','off','MaxFunEval',maxIter);
+
+gradFunc = @pseudoLikGradient;
+gradArgs = {featureEng,traindata,reg};
+winit = initWeights(featureEng, nNodeFeatures,nEdgeFeatures);
+weights = fminunc(gradFunc,winit,options,trainNdx,gradArgs{:});
+
+figure;
+subplot(2,2,1)
+showResults(weights, featureEng, infEng)
+title('Pseudo likelihood')
+drawnow
+  
+%%%%%%%%%%%%% MF
+
+infEng = latticeInferMF(nstates);
+gradFunc = @scrfGradient;
+gradArgs = {featureEng, infEng, traindata, reg};
+weights = fminunc(gradFunc,winit,options,trainNdx,gradArgs{:});
+subplot(2,2,2)
+showResults(weights, featureEng, infEng)
+title('MF')
+drawnow
+
+%%%%%%%%%%%%% BP
+
+infEng = latticeInferBP(nstates);
+gradFunc = @scrfGradient;
+gradArgs = {featureEng, infEng, traindata, reg};
+weights = fminunc(gradFunc,winit,options,trainNdx,gradArgs{:});
+subplot(2,2,3)
+showResults(weights, featureEng, infEng)
+title('BP')
+drawnow
+
+%%%%%%% Median filtering
+
+if exist('medfilt2', 'file')
+  subplot(2,2,4)
+  imshow(medfilt2(noisy))
+  title('median filtering')
+  figure;
+  imshow(medfilt2(noisy))
+  title('median filtering')
+end
+
+
+%%%%%%%%%%%%
+
+
+function showResults(weights, featureEng, infEng)
+
+[nodePot, edgePot] = mkPotentials(featureEng, weights);
+[nodeBel, MAPlabels] = infer(infEng, nodePot, edgePot);
+imshow(MAPlabels);
